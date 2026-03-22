@@ -1,14 +1,5 @@
 /** Firestore document types */
 
-export interface Product {
-  id: string
-  ean?: string
-  name: string
-  brand?: string
-  category?: string
-  imageUrl?: string
-}
-
 export type ChainId = 'ica' | 'willys' | 'coop' | 'hemkop' | 'lidl' | 'citygross'
 
 export interface ChainInfo {
@@ -26,29 +17,26 @@ export const CHAINS: Record<ChainId, ChainInfo> = {
   citygross: { id: 'citygross', displayName: 'City Gross', color: '#e4002b' },
 }
 
-export interface RetailerProduct {
+/** Document from `retailerProducts` collection */
+export interface RetailerProductDoc {
   id: string
-  productId?: string
-  chainId: ChainId
+  chainId: string
   externalId: string
   name: string
-  url?: string
-}
-
-export interface Price {
-  retailerProductId: string
-  chainId: ChainId
-  priceSek: number
-  ordinaryPriceSek?: number
+  brand?: string
+  ean?: string
   unit: string
-  unitPriceSek?: number
   quantity?: number
-  observedAt: Date
+  quantityString?: string
+  imageUrl?: string
+  url?: string
+  category?: string
+  lastScrapedAt?: Date
 }
 
-/** Product with aggregated prices across chains */
-export interface ProductWithPrices extends Product {
-  prices: Price[]
-  lowestUnitPrice?: number
-  unitLabel?: string
+/** Document from `retailerProducts/{id}/prices` subcollection */
+export interface PriceDoc {
+  price: number
+  ordinaryPrice?: number | null
+  scrapedAt: Date
 }

@@ -1,16 +1,15 @@
 import { Link } from 'react-router-dom'
-import type { ProductWithPrices, ChainId } from '@/lib/types'
+import type { RetailerProductDoc, PriceDoc, ChainId } from '@/lib/types'
 import { CHAINS } from '@/lib/types'
 
 interface ProductCardProps {
-  product: ProductWithPrices
+  product: RetailerProductDoc
+  latestPrice?: PriceDoc | null
 }
 
-export function ProductCard({ product }: ProductCardProps) {
-  const chains = [...new Set(product.prices.map((p) => p.chainId))]
-  const lowestPrice = product.prices.length
-    ? Math.min(...product.prices.map((p) => p.priceSek))
-    : null
+export function ProductCard({ product, latestPrice }: ProductCardProps) {
+  const chainId = product.chainId as ChainId
+  const chain = CHAINS[chainId]
 
   return (
     <Link
@@ -24,30 +23,26 @@ export function ProductCard({ product }: ProductCardProps) {
         )}
       </div>
 
-      <div className="mb-3 flex items-baseline gap-2">
-        <span className="text-3xl font-extrabold text-brand-700">
-          {product.lowestUnitPrice != null
-            ? product.lowestUnitPrice.toFixed(2)
-            : '—'}
-        </span>
-        {product.unitLabel && (
-          <span className="text-sm font-medium text-gray-500">
-            {product.unitLabel}
+      {latestPrice != null && (
+        <div className="mb-3">
+          <span className="text-3xl font-extrabold text-brand-700">
+            {latestPrice.price.toFixed(2)}
           </span>
-        )}
-      </div>
-
-      {lowestPrice != null && (
-        <p className="mb-3 text-sm text-gray-600">
-          Från <span className="font-semibold">{lowestPrice.toFixed(2)} kr</span>
-        </p>
+          <span className="ml-1 text-sm font-medium text-gray-500">kr</span>
+          {latestPrice.ordinaryPrice != null &&
+            latestPrice.ordinaryPrice > latestPrice.price && (
+              <span className="ml-2 text-sm text-gray-400 line-through">
+                {latestPrice.ordinaryPrice.toFixed(2)} kr
+              </span>
+            )}
+        </div>
       )}
 
-      <div className="flex gap-1.5">
-        {chains.map((chainId) => (
-          <ChainDot key={chainId} chainId={chainId} />
-        ))}
-      </div>
+      {chain && (
+        <div className="flex gap-1.5">
+          <ChainBadge chainId={chainId} />
+        </div>
+      )}
     </Link>
   )
 }
@@ -61,13 +56,13 @@ const chainColorClasses: Record<ChainId, string> = {
   citygross: 'bg-chain-citygross',
 }
 
-function ChainDot({ chainId }: { chainId: ChainId }) {
+function ChainBadge({ chainId }: { chainId: ChainId }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium text-white ${chainColorClasses[chainId]}`}
-      title={CHAINS[chainId].displayName}
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium text-white ${chainColorClasses[chainId] ?? 'bg-gray-500'}`}
+      title={CHAINS[chainId]?.displayName ?? chainId}
     >
-      {CHAINS[chainId].displayName}
+      {CHAINS[chainId]?.displayName ?? chainId}
     </span>
   )
 }
