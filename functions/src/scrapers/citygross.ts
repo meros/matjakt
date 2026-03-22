@@ -30,13 +30,12 @@ export class CityGrossScraper implements Scraper {
     "https://d1ax460061ulao.cloudfront.net/300x300/";
   private readonly storeNumber = 21;
   private readonly pageSize = 40;
-  private readonly maxProducts = 1000;
 
   async scrape(): Promise<ScrapedProduct[]> {
     const products: ScrapedProduct[] = [];
     let pageIndex = 0;
 
-    while (products.length < this.maxProducts) {
+    while (true) {
       const url = new URL(`${this.baseUrl}/products`);
       url.searchParams.set("storeNumber", String(this.storeNumber));
       url.searchParams.set("pageSize", String(this.pageSize));

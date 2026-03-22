@@ -33,7 +33,6 @@ export class CoopScraper implements Scraper {
     "https://external.api.coop.se/personalization/search/entities/by-attribute";
   private readonly storeId = "251300";
   private readonly pageSize = 48;
-  private readonly maxProducts = 1000;
 
   /** Kategori-slug → kategori-ID (från coop.se) */
   private readonly categories: Record<string, string> = {
@@ -69,12 +68,10 @@ export class CoopScraper implements Scraper {
     const products: ScrapedProduct[] = [];
 
     for (const [slug, categoryId] of Object.entries(this.categories)) {
-      if (products.length >= this.maxProducts) break;
-
       let skip = 0;
       let totalCount = Infinity;
 
-      while (skip < totalCount && products.length < this.maxProducts) {
+      while (skip < totalCount) {
         try {
           const data = await this.fetchCategory(slug, categoryId, skip);
           const results = data?.results ?? {};
@@ -185,15 +182,19 @@ export class CoopScraper implements Scraper {
     const superCat = navCat?.superCategories?.[0];
     const category = superCat?.name ?? navCat?.name ?? undefined;
 
+    // Bild: försök image-fält först, sedan images-array
+    const imageUrl = raw.image ?? raw.images?.[0]?.url ?? undefined;
+
     return {
       externalId: raw.id,
       name: raw.name,
+      brand: raw.brand ?? raw.manufacturer ?? undefined,
       ean: raw.ean ?? undefined,
       price,
       ordinaryPrice: unitPrice ?? undefined,
       unit,
       quantityString: raw.packageSizeInformation ?? undefined,
-      imageUrl: raw.image ?? undefined,
+      imageUrl,
       url: productUrl,
       category,
     };
@@ -222,6 +223,8 @@ interface CoopProduct {
   id: string;
   name: string;
   ean?: string;
+  brand?: string;
+  manufacturer?: string;
   salesPrice?: number;
   salesPriceData?: { b2cPrice?: number };
   piecePriceData?: { b2cPrice?: number };
@@ -237,6 +240,7 @@ interface CoopProduct {
   url?: string;
   productUrl?: string;
   image?: string;
+  images?: { url?: string }[];
   availableOnline?: boolean;
   onlinePromotions?: unknown[];
 }
