@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import type { ProductGroup, PriceDoc, ChainId } from '@/lib/types'
 import { CHAINS } from '@/lib/types'
 import { formatRelativeTime } from '@/lib/format'
+import { parseQuantity, calculateUnitPrice } from '@/lib/normalizer'
 
 interface ProductCardProps {
   group: ProductGroup
@@ -25,6 +26,17 @@ export function ProductCard({ group, prices }: ProductCardProps) {
   // Länka till billigaste entryn
   const linkTo = `/produkt/${cheapestEntry.id}`
 
+  // Parse quantity from quantityString or product name
+  const quantitySource =
+    cheapestEntry.quantityString || group.entries.find((e) => e.quantityString)?.quantityString || group.name
+  const parsed = parseQuantity(quantitySource)
+  const unitPriceInfo =
+    cheapestPrice && parsed ? calculateUnitPrice(cheapestPrice.price, parsed) : null
+
+  // Display quantity string
+  const displayQuantity =
+    cheapestEntry.quantityString || group.entries.find((e) => e.quantityString)?.quantityString || null
+
   return (
     <Link
       to={linkTo}
@@ -32,15 +44,29 @@ export function ProductCard({ group, prices }: ProductCardProps) {
     >
       <div className="mb-3">
         <h3 className="text-base font-bold text-gray-900">{group.name}</h3>
+        {displayQuantity && (
+          <p className="text-sm text-gray-500">{displayQuantity}</p>
+        )}
         {group.brand && (
           <p className="text-sm text-gray-500">{group.brand}</p>
         )}
       </div>
 
+      {unitPriceInfo && (
+        <div className="mb-2">
+          <span className="text-2xl font-extrabold text-brand-700">
+            {unitPriceInfo.unitPrice.toFixed(2).replace('.', ',')}
+          </span>
+          <span className="ml-1 text-sm font-medium text-gray-500">
+            {unitPriceInfo.unitLabel}
+          </span>
+        </div>
+      )}
+
       {cheapestPrice != null && (
         <div className="mb-3">
           <div>
-            <span className="text-3xl font-extrabold text-brand-700">
+            <span className={unitPriceInfo ? 'text-lg font-bold text-gray-700' : 'text-3xl font-extrabold text-brand-700'}>
               {cheapestPrice.price.toFixed(2)}
             </span>
             <span className="ml-1 text-sm font-medium text-gray-500">kr</span>

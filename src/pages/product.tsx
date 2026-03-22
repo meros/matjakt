@@ -6,6 +6,7 @@ import { getProductById, getProductsByName, getLatestPrice } from '@/lib/api'
 import { track } from '@/lib/firebase'
 import { formatRelativeTime } from '@/lib/format'
 import { PriceHistoryChart } from '@/components/price-history-chart'
+import { parseQuantity, calculateUnitPrice } from '@/lib/normalizer'
 
 const chainTextClasses: Record<ChainId, string> = {
   ica: 'text-chain-ica',
@@ -137,6 +138,9 @@ export function ProductPage() {
         <h1 className="text-2xl font-bold text-gray-900">
           {mainProduct.name}
         </h1>
+        {mainProduct.quantityString && (
+          <p className="text-base text-gray-500">{mainProduct.quantityString}</p>
+        )}
         {mainProduct.brand && (
           <p className="text-base text-gray-500">{mainProduct.brand}</p>
         )}
@@ -150,93 +154,128 @@ export function ProductPage() {
         {comparisons.length === 0 ? (
           <p className="text-gray-500">Inga priser hittade</p>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-gray-200">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50 text-sm text-gray-500">
-                  <th className="px-4 py-3 font-medium">Kedja</th>
-                  <th className="px-4 py-3 font-medium text-right">Pris</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparisons.map(({ product, price }, i) => {
-                  const chainId = product.chainId as ChainId
-                  const chain = CHAINS[chainId]
-                  const isPromo =
-                    price?.ordinaryPrice != null &&
-                    price.ordinaryPrice > price.price
+          (() => {
+            // Deduplicate: keep only the cheapest entry per chain
+            const seen = new Map<string, number>()
+            const deduped = comparisons.filter(({ product, price }, i) => {
+              const prev = seen.get(product.chainId)
+              if (prev !== undefined) {
+                // Keep if this one is cheaper
+                if (price && comparisons[prev]!.price && price.price < comparisons[prev]!.price!.price) {
+                  seen.set(product.chainId, i)
+                  return true
+                }
+                return false
+              }
+              seen.set(product.chainId, i)
+              return true
+            })
 
-                  return (
-                    <tr
-                      key={product.id}
-                      className={`border-b border-gray-100 ${i === 0 ? 'bg-brand-50' : ''}`}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`font-semibold ${chainTextClasses[chainId] ?? ''}`}
-                          >
-                            {chain?.displayName ?? product.chainId}
-                          </span>
-                          {product.url && (
-                            <a
-                              href={product.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-gray-400 hover:text-brand-600"
-                              title="Visa på kedjans webbplats"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                viewBox="0 0 20 20"
-                                fill="currentColor"
-                                className="h-3.5 w-3.5"
-                              >
-                                <path
-                                  fillRule="evenodd"
-                                  d="M4.25 5.5a.75.75 0 0 0-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75v-4a.75.75 0 0 1 1.5 0v4A2.25 2.25 0 0 1 12.75 17h-8.5A2.25 2.25 0 0 1 2 14.75v-8.5A2.25 2.25 0 0 1 4.25 4h5a.75.75 0 0 1 0 1.5h-5Zm7.25-.938a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0V6.56l-5.22 5.22a.75.75 0 1 1-1.06-1.06l5.22-5.22H12.25a.75.75 0 0 1-.75-.75Z"
-                                  clipRule="evenodd"
-                                />
-                              </svg>
-                            </a>
-                          )}
-                          {isPromo && (
-                            <span className="inline-block rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
-                              Kampanjpris
-                            </span>
-                          )}
-                        </div>
-                        {price && (
-                          <p className="mt-0.5 text-xs text-gray-400">
-                            Senast sedd: {formatRelativeTime(price.scrapedAt)}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {price ? (
-                          <>
+            return (
+            <div className="overflow-hidden rounded-xl border border-gray-200">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50 text-sm text-gray-500">
+                    <th className="px-4 py-3 font-medium">Kedja</th>
+                    <th className="px-4 py-3 font-medium text-right">Pris</th>
+                    <th className="px-4 py-3 font-medium text-right">Jämförpris</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deduped.map(({ product, price }, i) => {
+                    const chainId = product.chainId as ChainId
+                    const chain = CHAINS[chainId]
+                    const isPromo =
+                      price?.ordinaryPrice != null &&
+                      price.ordinaryPrice > price.price
+
+                    const qtySource = product.quantityString || product.name
+                    const parsed = parseQuantity(qtySource)
+                    const unitPriceInfo =
+                      price && parsed ? calculateUnitPrice(price.price, parsed) : null
+
+                    return (
+                      <tr
+                        key={product.id}
+                        className={`border-b border-gray-100 ${i === 0 ? 'bg-brand-50' : ''}`}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
                             <span
-                              className={`text-lg font-bold ${i === 0 ? 'text-brand-700' : 'text-gray-900'}`}
+                              className={`font-semibold ${chainTextClasses[chainId] ?? ''}`}
                             >
-                              {price.price.toFixed(2)} kr
+                              {chain?.displayName ?? product.chainId}
                             </span>
+                            {product.url && (
+                              <a
+                                href={product.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-gray-400 hover:text-brand-600"
+                                title="Visa på kedjans webbplats"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 20 20"
+                                  fill="currentColor"
+                                  className="h-3.5 w-3.5"
+                                >
+                                  <path
+                                    fillRule="evenodd"
+                                    d="M4.25 5.5a.75.75 0 0 0-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75v-4a.75.75 0 0 1 1.5 0v4A2.25 2.25 0 0 1 12.75 17h-8.5A2.25 2.25 0 0 1 2 14.75v-8.5A2.25 2.25 0 0 1 4.25 4h5a.75.75 0 0 1 0 1.5h-5Zm7.25-.938a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0V6.56l-5.22 5.22a.75.75 0 1 1-1.06-1.06l5.22-5.22H12.25a.75.75 0 0 1-.75-.75Z"
+                                    clipRule="evenodd"
+                                  />
+                                </svg>
+                              </a>
+                            )}
                             {isPromo && (
-                              <span className="ml-1 text-xs text-gray-400 line-through">
-                                {price.ordinaryPrice!.toFixed(2)} kr
+                              <span className="inline-block rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+                                Kampanjpris
                               </span>
                             )}
-                          </>
-                        ) : (
-                          <span className="text-gray-400">&mdash;</span>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+                          </div>
+                          {price && (
+                            <p className="mt-0.5 text-xs text-gray-400">
+                              Senast sedd: {formatRelativeTime(price.scrapedAt)}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {price ? (
+                            <>
+                              <span
+                                className={`text-lg font-bold ${i === 0 ? 'text-brand-700' : 'text-gray-900'}`}
+                              >
+                                {price.price.toFixed(2)} kr
+                              </span>
+                              {isPromo && (
+                                <span className="ml-1 text-xs text-gray-400 line-through">
+                                  {price.ordinaryPrice!.toFixed(2)} kr
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-gray-400">&mdash;</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {unitPriceInfo ? (
+                            <span className="text-sm font-semibold text-gray-600">
+                              {unitPriceInfo.unitPrice.toFixed(2).replace('.', ',')} {unitPriceInfo.unitLabel}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">&mdash;</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            )
+          })()
         )}
       </section>
 

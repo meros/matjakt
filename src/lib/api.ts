@@ -79,6 +79,21 @@ export async function searchProducts(
     })
   }
 
+  // Filter out pet food / animal-related products
+  const petKeywords = ['djur', 'hund', 'katt', 'fågel', 'husdjur', 'torrfoder', 'våtfoder']
+  results = results.filter((p) => {
+    const cat = p.category?.toLowerCase() ?? ''
+    return !petKeywords.some((kw) => cat.includes(kw))
+  })
+
+  // Boost relevance: products where query appears at start of name rank higher
+  const queryLower = queryStr.trim().toLowerCase()
+  results.sort((a, b) => {
+    const aStarts = a.name.toLowerCase().startsWith(queryLower) ? 0 : 1
+    const bStarts = b.name.toLowerCase().startsWith(queryLower) ? 0 : 1
+    return aStarts - bStarts
+  })
+
   return results
 }
 

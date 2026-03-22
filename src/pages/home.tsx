@@ -3,8 +3,8 @@ import { CHAINS } from '@/lib/types'
 
 export function HomePage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center px-4">
-      <div className="flex flex-col items-center gap-8 text-center">
+    <main className="flex min-h-screen flex-col items-center justify-center overflow-hidden px-4">
+      <div className="flex w-full max-w-xl flex-col items-center gap-8 text-center">
         <div>
           <h1 className="text-5xl font-extrabold tracking-tight sm:text-6xl">
             Mat<span className="text-brand-600">jakt</span>

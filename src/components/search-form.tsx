@@ -18,17 +18,17 @@ export function SearchForm({ defaultValue = '' }: SearchFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex w-full max-w-xl gap-2">
+    <form onSubmit={handleSubmit} className="flex w-full max-w-xl flex-col gap-2 sm:flex-row">
       <input
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder='Sök efter produkt, t.ex. "havregrynsgröt"...'
-        className="flex-1 rounded-full border border-gray-300 px-6 py-4 text-lg shadow-sm focus:border-brand-500 focus:ring-2 focus:ring-brand-200 focus:outline-none"
+        className="min-w-0 flex-1 rounded-full border border-gray-300 px-6 py-4 text-lg shadow-sm focus:border-brand-500 focus:ring-2 focus:ring-brand-200 focus:outline-none"
       />
       <button
         type="submit"
-        className="rounded-full bg-brand-600 px-8 py-4 text-lg font-semibold text-white shadow-sm hover:bg-brand-700 transition-colors"
+        className="shrink-0 rounded-full bg-brand-600 px-8 py-4 text-lg font-semibold text-white shadow-sm hover:bg-brand-700 transition-colors"
       >
         Sök
       </button>
