@@ -58,15 +58,21 @@ export function ProductCard({ group, prices }: ProductCardProps) {
   // Unique chains for badges
   const uniqueChains = [...new Set(group.entries.map((e) => e.chainId as ChainId))]
 
+  // Calculate savings
+  const savings = cheapestPrice?.ordinaryPrice != null &&
+    cheapestPrice.ordinaryPrice > cheapestPrice.price
+    ? cheapestPrice.ordinaryPrice - cheapestPrice.price
+    : null
+
   return (
     <Link
       to={linkTo}
       state={{ fromQuery: currentQuery }}
-      className="block rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:shadow-md transition-shadow"
+      className="block rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:shadow-lg hover:-translate-y-0.5"
     >
       <div className="flex gap-4">
         {group.imageUrl && (
-          <div className="flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-lg bg-gray-50">
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-gray-50">
             <img
               src={group.imageUrl}
               alt=""
@@ -100,7 +106,7 @@ export function ProductCard({ group, prices }: ProductCardProps) {
 
       {bestUnitPriceInfo && (
         <div className="mb-2">
-          <span className="text-2xl font-extrabold text-brand-700">
+          <span className="text-3xl font-extrabold text-brand-700">
             {bestUnitPriceInfo.unitPrice.toFixed(2).replace('.', ',')}
           </span>
           <span className="ml-1 text-sm font-medium text-gray-500">
@@ -111,19 +117,26 @@ export function ProductCard({ group, prices }: ProductCardProps) {
 
       {cheapestPrice != null && (
         <div className="mb-3">
-          <div>
-            <span className={bestUnitPriceInfo ? 'text-lg font-bold text-gray-700' : 'text-3xl font-extrabold text-brand-700'}>
-              {cheapestPrice.price.toFixed(2)}
-            </span>
-            <span className="ml-1 text-sm font-medium text-gray-500">kr</span>
-            {cheapestPrice.ordinaryPrice != null &&
-              cheapestPrice.ordinaryPrice > cheapestPrice.price && (
-                <span className="ml-2 text-sm text-gray-400 line-through">
-                  {cheapestPrice.ordinaryPrice.toFixed(2)} kr
-                </span>
+          <div className="flex items-center gap-2">
+            <div>
+              <span className={bestUnitPriceInfo ? 'text-lg font-bold text-gray-700' : 'text-3xl font-extrabold text-brand-700'}>
+                {cheapestPrice.price.toFixed(2)}
+              </span>
+              <span className="ml-1 text-sm font-medium text-gray-500">kr</span>
+              {cheapestPrice.ordinaryPrice != null &&
+                cheapestPrice.ordinaryPrice > cheapestPrice.price && (
+                  <span className="ml-2 text-sm text-gray-400 line-through">
+                    {cheapestPrice.ordinaryPrice.toFixed(2)} kr
+                  </span>
+                )}
+              {group.entries.length > 1 && (
+                <span className="ml-2 text-xs text-gray-400">lägsta pris</span>
               )}
-            {group.entries.length > 1 && (
-              <span className="ml-2 text-xs text-gray-400">lägsta pris</span>
+            </div>
+            {savings != null && (
+              <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
+                Spara {savings.toFixed(0)} kr
+              </span>
             )}
           </div>
           <p className="mt-0.5 text-xs text-gray-400">

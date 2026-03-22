@@ -97,13 +97,41 @@ export async function searchProducts(
     return !excludeKeywords.some((kw) => combined.includes(kw))
   })
 
-  // Boost relevance: products where query appears at start of name rank higher
+  // Multi-level relevance scoring
   const queryLower = queryStr.trim().toLowerCase()
-  results.sort((a, b) => {
-    const aStarts = a.name.toLowerCase().startsWith(queryLower) ? 0 : 1
-    const bStarts = b.name.toLowerCase().startsWith(queryLower) ? 0 : 1
-    return aStarts - bStarts
-  })
+
+  const CATEGORY_HINTS: Record<string, string[]> = {
+    'mjölk': ['mejeri', 'mjölk', 'dairy'],
+    'smör': ['mejeri', 'smör', 'margarin'],
+    'bröd': ['bröd', 'bageri', 'bread'],
+    'ost': ['mejeri', 'ost', 'cheese'],
+    'kött': ['kött', 'chark', 'meat'],
+    'fisk': ['fisk', 'seafood', 'skaldjur'],
+    'kaffe': ['kaffe', 'te', 'coffee'],
+    'ris': ['skafferi', 'ris', 'rice'],
+    'pasta': ['skafferi', 'pasta'],
+  }
+
+  const categoryHints = CATEGORY_HINTS[queryLower]
+
+  function relevanceScore(p: RetailerProductDoc): number {
+    const nameLower = p.name.toLowerCase()
+    const catLower = p.category?.toLowerCase() ?? ''
+
+    // Exact name match
+    if (nameLower === queryLower) return 0
+    // Name starts with query
+    if (nameLower.startsWith(queryLower)) return 1
+    // First word of name matches query
+    const firstWord = nameLower.split(/\s+/)[0]
+    if (firstWord === queryLower) return 2
+    // Category matches food category hint for query
+    if (categoryHints && categoryHints.some((hint) => catLower.includes(hint))) return 3
+    // Query appears elsewhere in name
+    return 4
+  }
+
+  results.sort((a, b) => relevanceScore(a) - relevanceScore(b))
 
   return results
 }
