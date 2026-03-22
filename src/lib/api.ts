@@ -79,11 +79,22 @@ export async function searchProducts(
     })
   }
 
-  // Filter out pet food / animal-related products
-  const petKeywords = ['djur', 'hund', 'katt', 'fågel', 'husdjur', 'torrfoder', 'våtfoder']
+  // Filter out pet food, baby food, and animal-related products
+  const excludeKeywords = [
+    // Djurmat
+    'djur', 'hund', 'hundmat', 'katt', 'kattmat', 'fågel', 'husdjur',
+    'torrfoder', 'våtfoder', 'hundgodis', 'kattgodis', 'paté hund',
+    'paté katt', 'vov ', 'doggy',
+    // Barnmat (specifikt för bebisar)
+    'barnmat', 'från 4 mån', 'från 6 mån', 'från 8 mån',
+    '4 mån', '6 mån', '8 mån', '12 mån',
+  ]
   results = results.filter((p) => {
-    const cat = p.category?.toLowerCase() ?? ''
-    return !petKeywords.some((kw) => cat.includes(kw))
+    const nameLower = p.name.toLowerCase()
+    const catLower = p.category?.toLowerCase() ?? ''
+    const brandLower = p.brand?.toLowerCase() ?? ''
+    const combined = `${nameLower} ${catLower} ${brandLower}`
+    return !excludeKeywords.some((kw) => combined.includes(kw))
   })
 
   // Boost relevance: products where query appears at start of name rank higher
