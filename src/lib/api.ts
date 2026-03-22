@@ -130,9 +130,34 @@ export function normalizeProductName(name: string): string {
 }
 
 /**
+ * Tar bort kvantitets-/storleksinformation från ett produktnamn.
+ * Används för att gruppera storleksvarianter av samma produkt.
+ *
+ * Exempel:
+ *   "Arla Mellanmjölk Längre Hållbarhet 1,5l" → "arla mellanmjölk längre hållbarhet"
+ *   "Coca-Cola 4x330ml" → "coca-cola"
+ *   "Nötfärs 12% 800 g" → "nötfärs 12%"
+ *   "6-pack Ramlösa Citrus 33cl" → "ramlösa citrus"
+ */
+export function stripQuantityFromName(name: string): string {
+  let n = normalizeProductName(name)
+  // Ta bort multipack-prefix: "6-pack", "4x", "12 x" etc. (i början eller mitt av namn)
+  n = n.replace(/\b\d+[\s-]*(?:pack|x)\b\s*/gi, '')
+  // Ta bort mängd med multiplikator: "4x125 g", "6 x 33 cl"
+  n = n.replace(/\b\d+\s*x\s*\d+(?:[.,]\d+)?\s*(?:g|kg|ml|cl|dl|l|liter|st)\b/gi, '')
+  // Ta bort mängd + enhet: "1.5 l", "500 g", "330 ml", "1 kg" etc.
+  n = n.replace(/\b(?:ca\.?\s*)?\d+(?:[.,]\d+)?\s*(?:g|kg|ml|cl|dl|l|liter|st)\b/gi, '')
+  // Rensa extra mellanslag och trimma
+  n = n.replace(/\s+/g, ' ').trim()
+  return n
+}
+
+/**
  * Grupperar produkter. Använder EAN som primär grupperingsnyckel
  * (samma EAN = exakt samma produkt oavsett butiksnamn). Produkter
- * utan EAN grupperas efter normaliserat namn som fallback.
+ * utan EAN grupperas efter normaliserat namn utan kvantitet, så att
+ * storleksvarianter (t.ex. "Mjölk 1,5l" och "Mjölk 3l") hamnar
+ * i samma grupp.
  *
  * Returnerar ProductGroup[] sorterade efter antal kedjor (mest först).
  */
@@ -156,6 +181,7 @@ export function groupProducts(products: RetailerProductDoc[]): ProductGroup[] {
     } else {
       groups.set(key, {
         name: product.name,
+        baseName: stripQuantityFromName(product.name),
         brand: product.brand,
         imageUrl: product.imageUrl,
         ean: product.ean,
@@ -179,13 +205,42 @@ export function groupProducts(products: RetailerProductDoc[]): ProductGroup[] {
   }
 
   // Andra passet: produkter utan EAN grupperas efter normaliserat namn
+  // utan kvantitet, så storleksvarianter hamnar ihop
   for (const product of products.filter((p) => !p.ean)) {
-    const key = `name:${normalizeProductName(product.name)}`
+    const key = `name:${stripQuantityFromName(product.name)}`
     addToGroup(key, product)
   }
 
-  const result = Array.from(groups.values())
-  // Sortera: flest kedjor först, sedan flest poster
+  // Tredje passet: slå ihop EAN-grupper med samma basnamn (storleksvarianter)
+  // T.ex. EAN för "Mjölk 1,5l" och EAN för "Mjölk 3l" → samma grupp
+  // Om basnamnet är tomt (hela namnet var en kvantitet), använd normaliseratnamn istället
+  const mergedGroups = new Map<string, ProductGroup>()
+  for (const group of groups.values()) {
+    const baseKey = group.baseName
+      ? `base:${group.baseName}`
+      : `full:${normalizeProductName(group.name)}`
+    const existing = mergedGroups.get(baseKey)
+    if (existing) {
+      existing.entries.push(...group.entries)
+      if (!existing.imageUrl && group.imageUrl) {
+        existing.imageUrl = group.imageUrl
+      }
+      if (!existing.brand && group.brand) {
+        existing.brand = group.brand
+      }
+    } else {
+      mergedGroups.set(baseKey, { ...group })
+    }
+  }
+
+  const result = Array.from(mergedGroups.values())
+
+  // Sortera entries inom grupp: efter kvantitet (minst först)
+  for (const group of result) {
+    group.entries.sort((a, b) => (a.quantity ?? 0) - (b.quantity ?? 0))
+  }
+
+  // Sortera grupper: flest kedjor först, sedan flest poster
   result.sort((a, b) => {
     const chainsA = new Set(a.entries.map((e) => e.chainId)).size
     const chainsB = new Set(b.entries.map((e) => e.chainId)).size

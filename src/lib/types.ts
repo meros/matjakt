@@ -37,6 +37,8 @@ export interface RetailerProductDoc {
 /** Grupperad produkt med poster från flera butikskedjor */
 export interface ProductGroup {
   name: string
+  /** Namn utan kvantitetsinformation, för gruppering av storleksvarianter */
+  baseName: string
   brand?: string
   imageUrl?: string
   ean?: string

@@ -233,8 +233,8 @@ function mapAxfoodProduct(
   // Bild-URL (använd fullstorlek om tillgänglig, annars thumbnail)
   const imageUrl = raw.image?.url ?? raw.thumbnail?.url ?? undefined;
 
-  // Produktsida-URL — använd webbsidans sök-URL (inte API:et)
-  const productUrl = `${baseUrl}/sok?q=${encodeURIComponent(raw.name)}`;
+  // Produktsida-URL — /produkt/{code} fungerar direkt med produktkoden
+  const productUrl = `${baseUrl}/produkt/${code}`;
 
   return {
     externalId: code,

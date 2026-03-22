@@ -203,8 +203,9 @@ export class CoopScraper implements Scraper {
   private buildProductUrl(raw: CoopProduct, _slug: string): string | undefined {
     if (raw.url) return raw.url;
     if (raw.productUrl) return raw.productUrl;
+    // Coops produktsidor nås via /handla/varor/produkt/{ean}/
+    if (raw.ean) return `https://www.coop.se/handla/varor/produkt/${raw.ean}/`;
     if (!raw.name) return undefined;
-    // Använd sök-URL istället för gissad produktsida (opålitliga sluggar)
     return `https://www.coop.se/handla/sok/?q=${encodeURIComponent(raw.name)}`;
   }
 }

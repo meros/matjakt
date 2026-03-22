@@ -14,13 +14,31 @@ export function ProductCard({ group, prices }: ProductCardProps) {
   const [searchParams] = useSearchParams()
   const currentQuery = searchParams.get('q') ?? ''
 
-  // Hitta billigaste priset och vilken entry det tillhör
+  // Beräkna bästa enhetspris per entry (för att hitta billigaste varianten totalt)
   let cheapestEntry = group.entries[0]!
   let cheapestPrice: PriceDoc | null = null
+  let bestUnitPriceInfo: { unitPrice: number; unitLabel: string } | null = null
 
   for (const entry of group.entries) {
     const price = prices[entry.id]
-    if (price && (!cheapestPrice || price.price < cheapestPrice.price)) {
+    if (!price) continue
+
+    const qSource = entry.quantityString || entry.name
+    const parsed = parseQuantity(qSource)
+    const upi = parsed ? calculateUnitPrice(price.price, parsed) : null
+
+    // Jämför med bästa enhetspris, eller fallback på lägsta kronpris
+    if (upi && bestUnitPriceInfo) {
+      if (upi.unitPrice < bestUnitPriceInfo.unitPrice) {
+        bestUnitPriceInfo = upi
+        cheapestPrice = price
+        cheapestEntry = entry
+      }
+    } else if (upi && !bestUnitPriceInfo) {
+      bestUnitPriceInfo = upi
+      cheapestPrice = price
+      cheapestEntry = entry
+    } else if (!cheapestPrice || price.price < cheapestPrice.price) {
       cheapestPrice = price
       cheapestEntry = entry
     }
@@ -29,16 +47,13 @@ export function ProductCard({ group, prices }: ProductCardProps) {
   // Länka till billigaste entryn, preserve search query in state
   const linkTo = `/produkt/${cheapestEntry.id}`
 
-  // Parse quantity from quantityString or product name
-  const quantitySource =
-    cheapestEntry.quantityString || group.entries.find((e) => e.quantityString)?.quantityString || group.name
-  const parsed = parseQuantity(quantitySource)
-  const unitPriceInfo =
-    cheapestPrice && parsed ? calculateUnitPrice(cheapestPrice.price, parsed) : null
+  // Samla unika storleksvarianter
+  const sizeVariants = collectSizeVariants(group.entries)
 
-  // Display quantity string
-  const displayQuantity =
-    cheapestEntry.quantityString || group.entries.find((e) => e.quantityString)?.quantityString || null
+  // Visa basnamn om det finns varianter, annars originalnamnet
+  const displayName = sizeVariants.length > 1
+    ? capitalizeFirst(group.baseName)
+    : group.name
 
   // Unique chains for badges
   const uniqueChains = [...new Set(group.entries.map((e) => e.chainId as ChainId))]
@@ -60,9 +75,22 @@ export function ProductCard({ group, prices }: ProductCardProps) {
           </div>
         )}
         <div className="mb-3 min-w-0">
-          <h3 className="text-base font-bold text-gray-900">{group.name}</h3>
-          {displayQuantity && (
-            <p className="text-sm text-gray-500">{displayQuantity}</p>
+          <h3 className="text-base font-bold text-gray-900">{displayName}</h3>
+          {sizeVariants.length > 1 ? (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {sizeVariants.map((size) => (
+                <span
+                  key={size}
+                  className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"
+                >
+                  {size}
+                </span>
+              ))}
+            </div>
+          ) : (
+            cheapestEntry.quantityString && (
+              <p className="text-sm text-gray-500">{cheapestEntry.quantityString}</p>
+            )
           )}
           {group.brand && (
             <p className="text-sm text-gray-500">{group.brand}</p>
@@ -70,13 +98,13 @@ export function ProductCard({ group, prices }: ProductCardProps) {
         </div>
       </div>
 
-      {unitPriceInfo && (
+      {bestUnitPriceInfo && (
         <div className="mb-2">
           <span className="text-2xl font-extrabold text-brand-700">
-            {unitPriceInfo.unitPrice.toFixed(2).replace('.', ',')}
+            {bestUnitPriceInfo.unitPrice.toFixed(2).replace('.', ',')}
           </span>
           <span className="ml-1 text-sm font-medium text-gray-500">
-            {unitPriceInfo.unitLabel}
+            {bestUnitPriceInfo.unitLabel}
           </span>
         </div>
       )}
@@ -84,7 +112,7 @@ export function ProductCard({ group, prices }: ProductCardProps) {
       {cheapestPrice != null && (
         <div className="mb-3">
           <div>
-            <span className={unitPriceInfo ? 'text-lg font-bold text-gray-700' : 'text-3xl font-extrabold text-brand-700'}>
+            <span className={bestUnitPriceInfo ? 'text-lg font-bold text-gray-700' : 'text-3xl font-extrabold text-brand-700'}>
               {cheapestPrice.price.toFixed(2)}
             </span>
             <span className="ml-1 text-sm font-medium text-gray-500">kr</span>
@@ -116,6 +144,27 @@ export function ProductCard({ group, prices }: ProductCardProps) {
       </div>
     </Link>
   )
+}
+
+/** Samlar unika storlekssträngar från entries */
+function collectSizeVariants(entries: ProductCardProps['group']['entries']): string[] {
+  const sizes = new Set<string>()
+  for (const entry of entries) {
+    const qs = entry.quantityString?.trim()
+    if (qs) sizes.add(qs)
+  }
+  // Sortera efter numeriskt värde
+  return [...sizes].sort((a, b) => {
+    const numA = parseFloat(a.replace(',', '.').replace(/[^\d.]/g, '')) || 0
+    const numB = parseFloat(b.replace(',', '.').replace(/[^\d.]/g, '')) || 0
+    return numA - numB
+  })
+}
+
+/** Gör första bokstaven versal i en sträng */
+function capitalizeFirst(s: string): string {
+  if (!s) return s
+  return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
 const chainColorClasses: Record<ChainId, string> = {
