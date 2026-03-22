@@ -199,13 +199,12 @@ export class CoopScraper implements Scraper {
     };
   }
 
-  private buildProductUrl(raw: CoopProduct, slug: string): string | undefined {
+  private buildProductUrl(raw: CoopProduct, _slug: string): string | undefined {
     if (raw.url) return raw.url;
     if (raw.productUrl) return raw.productUrl;
-    if (!raw.id || !raw.name) return undefined;
-
-    const sanitizedName = raw.name.toLowerCase().split(/\s+/).join("-");
-    return `https://www.coop.se/handla/varor${slug}/${sanitizedName}-${raw.id}`;
+    if (!raw.name) return undefined;
+    // Använd sök-URL istället för gissad produktsida (opålitliga sluggar)
+    return `https://www.coop.se/handla/sok/?q=${encodeURIComponent(raw.name)}`;
   }
 }
 

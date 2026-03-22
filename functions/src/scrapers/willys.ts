@@ -148,14 +148,8 @@ function mapAxfoodProduct(
   // Bild-URL (använd fullstorlek om tillgänglig, annars thumbnail)
   const imageUrl = raw.image?.url ?? raw.thumbnail?.url ?? undefined;
 
-  // Produktsida-URL
-  const slug = raw.name
-    .toLowerCase()
-    .replace(/[åä]/g, "a")
-    .replace(/ö/g, "o")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-  const productUrl = `${baseUrl}/produkt/${code.split("_")[0]}-${slug}`;
+  // Produktsida-URL — använd sök-URL istället för gissad slug (sluggar är opålitliga)
+  const productUrl = `${baseUrl}/search?q=${encodeURIComponent(raw.name)}`;
 
   return {
     externalId: code,
