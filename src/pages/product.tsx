@@ -4,6 +4,7 @@ import type { RetailerProductDoc, PriceDoc, ChainId } from '@/lib/types'
 import { CHAINS } from '@/lib/types'
 import { getProductById, getProductsByName, getLatestPrice } from '@/lib/api'
 import { track } from '@/lib/firebase'
+import { PriceHistoryChart } from '@/components/price-history-chart'
 
 const chainTextClasses: Record<ChainId, string> = {
   ica: 'text-chain-ica',
@@ -208,9 +209,9 @@ export function ProductPage() {
         )}
       </section>
 
-      <section className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-gray-400">
-        Prishistorik kommer snart
-      </section>
+      <PriceHistoryChart
+        products={comparisons.map((c) => c.product)}
+      />
     </main>
   )
 }

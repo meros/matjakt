@@ -119,3 +119,26 @@ export async function getLatestPrice(
     scrapedAt: data.scrapedAt?.toDate() ?? new Date(),
   }
 }
+
+/** Get price history for a retailerProduct (most recent N entries) */
+export async function getPriceHistory(
+  retailerProductId: string,
+  maxEntries = 100,
+): Promise<PriceDoc[]> {
+  const pricesRef = collection(
+    db,
+    'retailerProducts',
+    retailerProductId,
+    'prices',
+  )
+  const q = query(pricesRef, orderBy('scrapedAt', 'asc'), limit(maxEntries))
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => {
+    const data = d.data()
+    return {
+      price: data.price,
+      ordinaryPrice: data.ordinaryPrice ?? undefined,
+      scrapedAt: data.scrapedAt?.toDate() ?? new Date(),
+    }
+  })
+}
