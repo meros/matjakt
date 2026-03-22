@@ -4,6 +4,7 @@ import type { RetailerProductDoc, PriceDoc, ChainId } from '@/lib/types'
 import { CHAINS } from '@/lib/types'
 import { getProductById, getProductsByName, getLatestPrice } from '@/lib/api'
 import { track } from '@/lib/firebase'
+import { formatRelativeTime } from '@/lib/format'
 import { PriceHistoryChart } from '@/components/price-history-chart'
 
 const chainTextClasses: Record<ChainId, string> = {
@@ -171,15 +172,45 @@ export function ProductPage() {
                       className={`border-b border-gray-100 ${i === 0 ? 'bg-brand-50' : ''}`}
                     >
                       <td className="px-4 py-3">
-                        <span
-                          className={`font-semibold ${chainTextClasses[chainId] ?? ''}`}
-                        >
-                          {chain?.displayName ?? product.chainId}
-                        </span>
-                        {isPromo && (
-                          <span className="ml-2 inline-block rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
-                            Kampanjpris
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`font-semibold ${chainTextClasses[chainId] ?? ''}`}
+                          >
+                            {chain?.displayName ?? product.chainId}
                           </span>
+                          {product.url && (
+                            <a
+                              href={product.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-gray-400 hover:text-brand-600"
+                              title="Visa på kedjans webbplats"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 20 20"
+                                fill="currentColor"
+                                className="h-3.5 w-3.5"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M4.25 5.5a.75.75 0 0 0-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75v-4a.75.75 0 0 1 1.5 0v4A2.25 2.25 0 0 1 12.75 17h-8.5A2.25 2.25 0 0 1 2 14.75v-8.5A2.25 2.25 0 0 1 4.25 4h5a.75.75 0 0 1 0 1.5h-5Zm7.25-.938a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0V6.56l-5.22 5.22a.75.75 0 1 1-1.06-1.06l5.22-5.22H12.25a.75.75 0 0 1-.75-.75Z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            </a>
+                          )}
+                          {isPromo && (
+                            <span className="inline-block rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
+                              Kampanjpris
+                            </span>
+                          )}
+                        </div>
+                        {price && (
+                          <p className="mt-0.5 text-xs text-gray-400">
+                            Senast sedd: {formatRelativeTime(price.scrapedAt)}
+                          </p>
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">

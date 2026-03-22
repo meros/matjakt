@@ -34,6 +34,16 @@ export interface RetailerProductDoc {
   lastScrapedAt?: Date
 }
 
+/** Grupperad produkt med poster från flera butikskedjor */
+export interface ProductGroup {
+  name: string
+  brand?: string
+  imageUrl?: string
+  ean?: string
+  category?: string
+  entries: RetailerProductDoc[]
+}
+
 /** Document from `retailerProducts/{id}/prices` subcollection */
 export interface PriceDoc {
   price: number

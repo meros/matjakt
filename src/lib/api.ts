@@ -9,7 +9,7 @@ import {
   orderBy,
   limit,
 } from 'firebase/firestore'
-import type { RetailerProductDoc, PriceDoc } from './types'
+import type { RetailerProductDoc, PriceDoc, ProductGroup } from './types'
 
 const retailerProductsRef = collection(db, 'retailerProducts')
 
@@ -35,7 +35,8 @@ function docToRetailerProduct(
 }
 
 /**
- * Search retailerProducts by name prefix.
+ * Search retailerProducts using searchTokens (array-contains).
+ * First word → Firestore array-contains, remaining words → client-side filter on nameLower.
  * If query is empty, returns recent products ordered by lastScrapedAt.
  */
 export async function searchProducts(
@@ -51,33 +52,121 @@ export async function searchProducts(
     return snap.docs.map(docToRetailerProduct)
   }
 
-  // Firestore prefix search: name >= query AND name < query + '\uf8ff'
-  // Try both original case and lowercase first letter
-  const trimmed = queryStr.trim()
-  const variants = new Set([
-    trimmed,
-    trimmed.charAt(0).toUpperCase() + trimmed.slice(1),
-    trimmed.charAt(0).toLowerCase() + trimmed.slice(1),
-  ])
+  const words = queryStr
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
 
-  const allResults = new Map<string, RetailerProductDoc>()
+  if (words.length === 0) return []
 
-  for (const variant of variants) {
-    const q = query(
-      retailerProductsRef,
-      where('name', '>=', variant),
-      where('name', '<', variant + '\uf8ff'),
-      limit(100),
-    )
-    const snap = await getDocs(q)
-    for (const d of snap.docs) {
-      if (!allResults.has(d.id)) {
-        allResults.set(d.id, docToRetailerProduct(d))
+  // Firestore only allows one array-contains per query — use the first word
+  const firstWord = words[0]!
+  const q = query(
+    retailerProductsRef,
+    where('searchTokens', 'array-contains', firstWord),
+    limit(200),
+  )
+  const snap = await getDocs(q)
+  let results = snap.docs.map(docToRetailerProduct)
+
+  // Client-side filter for remaining words using nameLower from the doc data
+  if (words.length > 1) {
+    const remainingWords = words.slice(1)
+    results = results.filter((p) => {
+      const nameLower = p.name.toLowerCase()
+      return remainingWords.every((w) => nameLower.includes(w))
+    })
+  }
+
+  return results
+}
+
+/**
+ * Normaliserar ett produktnamn för grupperingsändamål.
+ * Tar bort varumärkessymboler, normaliserar siffror och enheter.
+ */
+export function normalizeProductName(name: string): string {
+  let n = name.toLowerCase()
+  // Ta bort ®, ™, ©
+  n = n.replace(/[®™©]/g, '')
+  // Normalisera whitespace
+  n = n.replace(/\s+/g, ' ').trim()
+  // Normalisera komma till punkt i siffror (1,5 → 1.5)
+  n = n.replace(/(\d),(\d)/g, '$1.$2')
+  // Normalisera enhetsformatering: "1.5l" → "1.5 l", "500g" → "500 g"
+  n = n.replace(/(\d)(g|kg|ml|cl|dl|l|liter|st)\b/gi, '$1 $2')
+  // Normalisera "liter" → "l"
+  n = n.replace(/\bliter\b/g, 'l')
+  // Rensa extra mellanslag
+  n = n.replace(/\s+/g, ' ').trim()
+  return n
+}
+
+/**
+ * Grupperar produkter. Använder EAN som primär grupperingsnyckel
+ * (samma EAN = exakt samma produkt oavsett butiksnamn). Produkter
+ * utan EAN grupperas efter normaliserat namn som fallback.
+ *
+ * Returnerar ProductGroup[] sorterade efter antal kedjor (mest först).
+ */
+export function groupProducts(products: RetailerProductDoc[]): ProductGroup[] {
+  const eanToGroupKey = new Map<string, string>()
+  const groups = new Map<string, ProductGroup>()
+
+  function addToGroup(key: string, product: RetailerProductDoc) {
+    const existing = groups.get(key)
+    if (existing) {
+      existing.entries.push(product)
+      if (!existing.imageUrl && product.imageUrl) {
+        existing.imageUrl = product.imageUrl
       }
+      if (!existing.brand && product.brand) {
+        existing.brand = product.brand
+      }
+      if (!existing.ean && product.ean) {
+        existing.ean = product.ean
+      }
+    } else {
+      groups.set(key, {
+        name: product.name,
+        brand: product.brand,
+        imageUrl: product.imageUrl,
+        ean: product.ean,
+        category: product.category,
+        entries: [product],
+      })
     }
   }
 
-  return Array.from(allResults.values()).slice(0, 100)
+  // Första passet: produkter med EAN grupperas efter EAN
+  for (const product of products.filter((p) => p.ean)) {
+    const ean = product.ean!
+    const existingKey = eanToGroupKey.get(ean)
+    if (existingKey) {
+      addToGroup(existingKey, product)
+    } else {
+      const key = `ean:${ean}`
+      eanToGroupKey.set(ean, key)
+      addToGroup(key, product)
+    }
+  }
+
+  // Andra passet: produkter utan EAN grupperas efter normaliserat namn
+  for (const product of products.filter((p) => !p.ean)) {
+    const key = `name:${normalizeProductName(product.name)}`
+    addToGroup(key, product)
+  }
+
+  const result = Array.from(groups.values())
+  // Sortera: flest kedjor först, sedan flest poster
+  result.sort((a, b) => {
+    const chainsA = new Set(a.entries.map((e) => e.chainId)).size
+    const chainsB = new Set(b.entries.map((e) => e.chainId)).size
+    if (chainsB !== chainsA) return chainsB - chainsA
+    return b.entries.length - a.entries.length
+  })
+  return result
 }
 
 /** Get a single retailerProduct by document ID */

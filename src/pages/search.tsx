@@ -2,16 +2,19 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { SearchForm } from '@/components/search-form'
 import { ProductCard } from '@/components/product-card'
-import type { RetailerProductDoc, PriceDoc } from '@/lib/types'
-import { searchProducts, getLatestPrice } from '@/lib/api'
+import type { ProductGroup, PriceDoc } from '@/lib/types'
+import { searchProducts, groupProducts, getLatestPrice } from '@/lib/api'
 import { track } from '@/lib/firebase'
+
+/** Pris per grupp: mappar retailerProduct-id till senaste pris */
+type GroupPrices = Record<string, PriceDoc | null>
 
 export function SearchPage() {
   const [searchParams] = useSearchParams()
   const queryStr = searchParams.get('q') ?? ''
 
-  const [results, setResults] = useState<RetailerProductDoc[]>([])
-  const [prices, setPrices] = useState<Record<string, PriceDoc | null>>({})
+  const [groups, setGroups] = useState<ProductGroup[]>([])
+  const [prices, setPrices] = useState<GroupPrices>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -23,15 +26,18 @@ export function SearchPage() {
     searchProducts(queryStr)
       .then(async (products) => {
         if (cancelled) return
-        setResults(products)
+
+        const grouped = groupProducts(products)
+        setGroups(grouped)
 
         if (queryStr) {
-          track.search(queryStr, products.length)
+          track.search(queryStr, grouped.length)
         }
 
-        // Fetch latest price for each product
+        // Hämta senaste pris för alla entries i alla grupper
+        const allEntries = grouped.flatMap((g) => g.entries)
         const priceEntries = await Promise.all(
-          products.map(async (p) => {
+          allEntries.map(async (p) => {
             const price = await getLatestPrice(p.id)
             return [p.id, price] as const
           }),
@@ -72,7 +78,7 @@ export function SearchPage() {
       {!loading && !error && (
         <>
           <h2 className="mb-6 text-lg text-gray-700">
-            <span className="font-semibold">{results.length}</span> resultat
+            <span className="font-semibold">{groups.length}</span> resultat
             {queryStr && (
               <>
                 {' '}för &ldquo;<span className="font-medium">{queryStr}</span>
@@ -81,17 +87,17 @@ export function SearchPage() {
             )}
           </h2>
 
-          {results.length === 0 ? (
+          {groups.length === 0 ? (
             <p className="text-center text-gray-500">
               Inga produkter hittade
             </p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {results.map((product) => (
+              {groups.map((group) => (
                 <ProductCard
-                  key={product.id}
-                  product={product}
-                  latestPrice={prices[product.id]}
+                  key={group.name}
+                  group={group}
+                  prices={prices}
                 />
               ))}
             </div>

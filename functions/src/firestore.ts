@@ -7,6 +7,8 @@ interface RetailerProductData {
   chainId: string;
   externalId: string;
   name: string;
+  nameLower: string;
+  searchTokens: string[];
   brand?: string;
   ean?: string;
   unit: string;
@@ -17,6 +19,24 @@ interface RetailerProductData {
   category?: string;
   productId?: string;
   lastScrapedAt: Timestamp;
+}
+
+/**
+ * Genererar söktokens från namn och varumärke.
+ * Varje token är ett unikt ord i lowercase.
+ */
+export function buildSearchTokens(name: string, brand?: string): string[] {
+  let text = [name, brand ?? ""].join(" ");
+  // Ta bort varumärkessymboler
+  text = text.replace(/[®™©]/g, "");
+  // Normalisera komma till punkt i siffror (1,5 → 1.5)
+  text = text.replace(/(\d),(\d)/g, "$1.$2");
+  const tokens = text
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.replace(/[^a-zåäö0-9.]/g, ""))
+    .filter((t) => t.length > 0);
+  return [...new Set(tokens)];
 }
 
 /**
@@ -34,6 +54,8 @@ export async function upsertRetailerProduct(
     chainId,
     externalId: product.externalId,
     name: product.name,
+    nameLower: product.name.toLowerCase(),
+    searchTokens: buildSearchTokens(product.name, product.brand),
     unit: product.unit,
     lastScrapedAt: Timestamp.now(),
   };

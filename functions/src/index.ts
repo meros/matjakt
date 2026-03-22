@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onRequest } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
@@ -10,7 +10,7 @@ import { CoopScraper } from "./scrapers/coop.js";
 import { CityGrossScraper } from "./scrapers/citygross.js";
 import { LidlScraper } from "./scrapers/lidl.js";
 import { Scraper } from "./scrapers/types.js";
-import { upsertRetailerProduct, recordPrice, matchProduct } from "./firestore.js";
+import { upsertRetailerProduct, recordPrice, matchProduct, buildSearchTokens } from "./firestore.js";
 
 initializeApp();
 
@@ -183,6 +183,49 @@ export const manualScrape = onRequest(
       (r) => r.status === "failed" || r.status === "degraded"
     );
     res.status(hasFailures ? 207 : 200).json({ results });
+  }
+);
+
+// Engångsbackfill — lägger till nameLower + searchTokens på alla retailerProducts
+export const backfillSearchTokens = onRequest(
+  { region: "europe-west1", timeoutSeconds: 540, memory: "512MiB" },
+  async (_req, res) => {
+    const batchSize = 500;
+    let processed = 0;
+    let lastDoc: QueryDocumentSnapshot | undefined;
+
+    while (true) {
+      let q = db()
+        .collection("retailerProducts")
+        .orderBy("__name__")
+        .limit(batchSize);
+
+      if (lastDoc) {
+        q = q.startAfter(lastDoc);
+      }
+
+      const snap = await q.get();
+      if (snap.empty) break;
+
+      const batch = db().batch();
+      for (const docSnap of snap.docs) {
+        const data = docSnap.data();
+        const name: string = data.name ?? "";
+        const brand: string = data.brand ?? "";
+        batch.update(docSnap.ref, {
+          nameLower: name.toLowerCase(),
+          searchTokens: buildSearchTokens(name, brand),
+        });
+      }
+      await batch.commit();
+
+      processed += snap.docs.length;
+      lastDoc = snap.docs[snap.docs.length - 1];
+      logger.info(`Backfill: ${processed} dokument uppdaterade`);
+    }
+
+    logger.info(`Backfill klar: ${processed} dokument totalt`);
+    res.status(200).json({ processed });
   }
 );
 
