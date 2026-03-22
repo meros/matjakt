@@ -1,4 +1,5 @@
 import { initializeApp } from "firebase-admin/app";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onRequest } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
@@ -13,6 +14,8 @@ import { upsertRetailerProduct, recordPrice, matchProduct } from "./firestore.js
 
 initializeApp();
 
+const db = () => getFirestore();
+
 const SCRAPERS: Record<string, () => Scraper> = {
   ica: () => new IcaScraper(),
   willys: () => new WillysScraper(),
@@ -22,60 +25,144 @@ const SCRAPERS: Record<string, () => Scraper> = {
   lidl: () => new LidlScraper(),
 };
 
-async function runScraper(scraper: Scraper): Promise<number> {
-  logger.info(`Startar skrapning för ${scraper.chainId}`);
+// Minimikrav per kedja — under detta räknas det som misslyckat
+const MIN_PRODUCTS: Record<string, number> = {
+  willys: 100,
+  hemkop: 100,
+  coop: 50,
+  citygross: 50,
+  ica: 0, // WAF-begränsad, 0 ok för nu
+  lidl: 0, // Ingen API
+};
 
-  const products = await scraper.scrape();
-  logger.info(`Hämtade ${products.length} produkter från ${scraper.chainId}`);
-
-  let saved = 0;
-  for (const product of products) {
-    try {
-      const retailerProductId = await upsertRetailerProduct(
-        scraper.chainId,
-        product
-      );
-      await recordPrice(retailerProductId, product.price, product.ordinaryPrice);
-      await matchProduct(retailerProductId, product);
-      saved++;
-    } catch (err) {
-      logger.warn(`Kunde inte spara produkt ${product.externalId} från ${scraper.chainId}:`, err);
-    }
-  }
-
-  logger.info(`Klar med ${scraper.chainId}: ${saved}/${products.length} produkter sparade`);
-  return saved;
+interface ScrapeResult {
+  chainId: string;
+  fetched: number;
+  saved: number;
+  errors: number;
+  durationMs: number;
+  status: "ok" | "degraded" | "failed";
+  errorMessage?: string;
 }
 
-// Schemalagda skrapningar
+/**
+ * Loggar skrapningsresultat till Firestore för dashboarding och alerting.
+ */
+async function logScrapeResult(result: ScrapeResult): Promise<void> {
+  await db().collection("scrapeRuns").add({
+    ...result,
+    timestamp: FieldValue.serverTimestamp(),
+  });
+}
+
+async function runScraper(scraper: Scraper): Promise<ScrapeResult> {
+  const start = Date.now();
+  const result: ScrapeResult = {
+    chainId: scraper.chainId,
+    fetched: 0,
+    saved: 0,
+    errors: 0,
+    durationMs: 0,
+    status: "ok",
+  };
+
+  try {
+    const products = await scraper.scrape();
+    result.fetched = products.length;
+    logger.info(`Hämtade ${products.length} produkter från ${scraper.chainId}`);
+
+    for (const product of products) {
+      try {
+        const retailerProductId = await upsertRetailerProduct(
+          scraper.chainId,
+          product
+        );
+        await recordPrice(retailerProductId, product.price, product.ordinaryPrice);
+        await matchProduct(retailerProductId, product);
+        result.saved++;
+      } catch (err) {
+        result.errors++;
+        if (result.errors <= 5) {
+          logger.warn(
+            `Kunde inte spara ${product.externalId} från ${scraper.chainId}:`,
+            err
+          );
+        }
+      }
+    }
+
+    // Kontrollera om resultatet är godtagbart
+    const minRequired = MIN_PRODUCTS[scraper.chainId] ?? 0;
+    if (result.saved < minRequired) {
+      result.status = "degraded";
+      logger.error(
+        `VARNING: ${scraper.chainId} returnerade bara ${result.saved} produkter (minimum: ${minRequired})`
+      );
+    }
+
+    if (result.errors > result.fetched * 0.2) {
+      result.status = "degraded";
+      logger.error(
+        `VARNING: ${scraper.chainId} hade ${result.errors}/${result.fetched} fel (>20%)`
+      );
+    }
+  } catch (err) {
+    result.status = "failed";
+    result.errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error(`KRITISKT: Skrapning av ${scraper.chainId} kraschade:`, err);
+  }
+
+  result.durationMs = Date.now() - start;
+  logger.info(
+    `${scraper.chainId}: ${result.status} — ${result.saved}/${result.fetched} sparade, ${result.errors} fel, ${result.durationMs}ms`
+  );
+
+  // Spara resultat för monitoring
+  try {
+    await logScrapeResult(result);
+  } catch (err) {
+    logger.error("Kunde inte logga skrapningsresultat:", err);
+  }
+
+  return result;
+}
+
+// Schemalagda skrapningar med retry-logik
+const SCHEDULE_OPTIONS = {
+  region: "europe-west1" as const,
+  timeoutSeconds: 540,
+  memory: "512MiB" as const,
+  retryCount: 2,
+};
+
 export const scrapeIca = onSchedule(
-  { schedule: "every 4 hours", region: "europe-west1", timeoutSeconds: 540 },
+  { ...SCHEDULE_OPTIONS, schedule: "every 4 hours" },
   async () => { await runScraper(new IcaScraper()); }
 );
 
 export const scrapeWillys = onSchedule(
-  { schedule: "every 6 hours", region: "europe-west1", timeoutSeconds: 540 },
+  { ...SCHEDULE_OPTIONS, schedule: "every 6 hours" },
   async () => { await runScraper(new WillysScraper()); }
 );
 
 export const scrapeHemkop = onSchedule(
-  { schedule: "every 6 hours", region: "europe-west1", timeoutSeconds: 540 },
+  { ...SCHEDULE_OPTIONS, schedule: "every 6 hours" },
   async () => { await runScraper(new HemkopScraper()); }
 );
 
 export const scrapeCoop = onSchedule(
-  { schedule: "every 6 hours", region: "europe-west1", timeoutSeconds: 540 },
+  { ...SCHEDULE_OPTIONS, schedule: "every 6 hours" },
   async () => { await runScraper(new CoopScraper()); }
 );
 
 export const scrapeCitygross = onSchedule(
-  { schedule: "every 12 hours", region: "europe-west1", timeoutSeconds: 540 },
+  { ...SCHEDULE_OPTIONS, schedule: "every 12 hours" },
   async () => { await runScraper(new CityGrossScraper()); }
 );
 
 // Manuell skrapning via HTTP
 export const manualScrape = onRequest(
-  { region: "europe-west1", timeoutSeconds: 540 },
+  { region: "europe-west1", timeoutSeconds: 540, memory: "512MiB" },
   async (req, res) => {
     const chain = req.query.chain as string | undefined;
 
@@ -87,16 +174,50 @@ export const manualScrape = onRequest(
       return;
     }
 
-    const results: Record<string, number> = {};
+    const results: Record<string, ScrapeResult> = {};
     for (const id of scraperIds) {
-      try {
-        results[id] = await runScraper(SCRAPERS[id]!());
-      } catch (err) {
-        logger.error(`Skrapning misslyckades för ${id}:`, err);
-        results[id] = -1;
+      results[id] = await runScraper(SCRAPERS[id]!());
+    }
+
+    const hasFailures = Object.values(results).some(
+      (r) => r.status === "failed" || r.status === "degraded"
+    );
+    res.status(hasFailures ? 207 : 200).json({ results });
+  }
+);
+
+// Health-check endpoint — visar senaste skrapningsstatus per kedja
+export const scrapeHealth = onRequest(
+  { region: "europe-west1" },
+  async (_req, res) => {
+    const health: Record<string, unknown> = {};
+
+    for (const chainId of Object.keys(SCRAPERS)) {
+      const snap = await db()
+        .collection("scrapeRuns")
+        .where("chainId", "==", chainId)
+        .orderBy("timestamp", "desc")
+        .limit(1)
+        .get();
+
+      if (snap.empty) {
+        health[chainId] = { status: "never_run" };
+      } else {
+        const data = snap.docs[0]!.data();
+        health[chainId] = {
+          status: data.status,
+          saved: data.saved,
+          fetched: data.fetched,
+          errors: data.errors,
+          durationMs: data.durationMs,
+          lastRun: data.timestamp?.toDate()?.toISOString(),
+        };
       }
     }
 
-    res.json({ results });
+    const allOk = Object.values(health).every(
+      (h) => (h as Record<string, unknown>).status === "ok"
+    );
+    res.status(allOk ? 200 : 503).json({ health });
   }
 );
