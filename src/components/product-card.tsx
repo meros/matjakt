@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import type { ProductGroup, PriceDoc, ChainId } from '@/lib/types'
 import { CHAINS } from '@/lib/types'
 import { formatRelativeTime } from '@/lib/format'
@@ -11,6 +11,9 @@ interface ProductCardProps {
 }
 
 export function ProductCard({ group, prices }: ProductCardProps) {
+  const [searchParams] = useSearchParams()
+  const currentQuery = searchParams.get('q') ?? ''
+
   // Hitta billigaste priset och vilken entry det tillhör
   let cheapestEntry = group.entries[0]!
   let cheapestPrice: PriceDoc | null = null
@@ -23,7 +26,7 @@ export function ProductCard({ group, prices }: ProductCardProps) {
     }
   }
 
-  // Länka till billigaste entryn
+  // Länka till billigaste entryn, preserve search query in state
   const linkTo = `/produkt/${cheapestEntry.id}`
 
   // Parse quantity from quantityString or product name
@@ -37,19 +40,34 @@ export function ProductCard({ group, prices }: ProductCardProps) {
   const displayQuantity =
     cheapestEntry.quantityString || group.entries.find((e) => e.quantityString)?.quantityString || null
 
+  // Unique chains for badges
+  const uniqueChains = [...new Set(group.entries.map((e) => e.chainId as ChainId))]
+
   return (
     <Link
       to={linkTo}
+      state={{ fromQuery: currentQuery }}
       className="block rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:shadow-md transition-shadow"
     >
-      <div className="mb-3">
-        <h3 className="text-base font-bold text-gray-900">{group.name}</h3>
-        {displayQuantity && (
-          <p className="text-sm text-gray-500">{displayQuantity}</p>
+      <div className="flex gap-4">
+        {group.imageUrl && (
+          <div className="flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-lg bg-gray-50">
+            <img
+              src={group.imageUrl}
+              alt=""
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
         )}
-        {group.brand && (
-          <p className="text-sm text-gray-500">{group.brand}</p>
-        )}
+        <div className="mb-3 min-w-0">
+          <h3 className="text-base font-bold text-gray-900">{group.name}</h3>
+          {displayQuantity && (
+            <p className="text-sm text-gray-500">{displayQuantity}</p>
+          )}
+          {group.brand && (
+            <p className="text-sm text-gray-500">{group.brand}</p>
+          )}
+        </div>
       </div>
 
       {unitPriceInfo && (
@@ -86,13 +104,15 @@ export function ProductCard({ group, prices }: ProductCardProps) {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-1.5">
-        {group.entries.map((entry) => {
-          const chainId = entry.chainId as ChainId
-          return (
-            <ChainBadge key={entry.id} chainId={chainId} />
-          )
-        })}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {uniqueChains.map((chainId) => (
+          <ChainBadge key={chainId} chainId={chainId} />
+        ))}
+        {uniqueChains.length > 1 && (
+          <span className="text-xs text-gray-500">
+            Finns i {uniqueChains.length} kedjor
+          </span>
+        )}
       </div>
     </Link>
   )

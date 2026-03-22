@@ -1,5 +1,10 @@
+import { Link } from 'react-router-dom'
 import { SearchForm } from '@/components/search-form'
 import { CHAINS } from '@/lib/types'
+
+const POPULAR_SEARCHES = [
+  'Mjölk', 'Smör', 'Bröd', 'Kaffe', 'Ägg', 'Pasta', 'Ris', 'Ost',
+]
 
 export function HomePage() {
   return (
@@ -16,7 +21,19 @@ export function HomePage() {
 
         <SearchForm />
 
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-6">
+        <div className="flex flex-wrap justify-center gap-2">
+          {POPULAR_SEARCHES.map((term) => (
+            <Link
+              key={term}
+              to={`/sok?q=${encodeURIComponent(term)}`}
+              className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 shadow-sm transition-colors hover:border-brand-300 hover:text-brand-700"
+            >
+              {term}
+            </Link>
+          ))}
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-6">
           {Object.values(CHAINS).map((chain) => (
             <span
               key={chain.id}
