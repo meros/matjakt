@@ -1,196 +1,257 @@
 import { ScrapedProduct, ScrapedProductSchema, Scraper } from "./types.js";
 
-const BASE_URL = "https://handlaprivatkund.ica.se";
-const STORE_LIST_URL = "https://handla.ica.se/api/store/v1";
+/**
+ * ICA-skrapare som använder det publika produkt-API:et på handlaprivatkund.ica.se.
+ *
+ * Strategi: Två metoder kombineras för att nå ~1000 produkter:
+ *   1. Hämta produkter via /api/v5/products (hela sortimentet, offset-paginering)
+ *   2. Komplettera med sökningar via /api/v5/products/search för bredare täckning
+ *
+ * Dedupliserar på produkt-ID. Ingen autentisering krävs.
+ */
+
+const USER_AGENT =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 /**
- * Standardbutik att använda för att hämta produkter.
- * Maxi-butiker har störst sortiment. Vi använder Maxi ICA Stormarknad Lindhagen
- * som ligger centralt och har brett utbud.
+ * Maxi ICA Stormarknad Lindhagen — centralt i Stockholm med brett sortiment.
+ * Större butiker har fler produkter tillgängliga i API:et.
  */
 const DEFAULT_STORE_ID = "1004394";
 
-const USER_AGENT =
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-/** Max antal produkter att hämta totalt */
-const MAX_PRODUCTS = 1000;
-
-/** Max antal produkter per kategori-anrop */
 const PAGE_SIZE = 50;
+const MAX_PRODUCTS = 1500;
+const MAX_PAGES_PER_QUERY = 10;
 
-/** Paus mellan anrop i ms för att undvika rate-limiting */
-const DELAY_MS = 200;
+/** Breda sökord för att komplettera produktlistan */
+const SEARCH_TERMS = [
+  "mjölk",
+  "bröd",
+  "kött",
+  "frukt",
+  "grönsaker",
+  "ost",
+  "juice",
+  "kaffe",
+  "pasta",
+  "ris",
+  "fisk",
+  "kyckling",
+  "korv",
+  "smör",
+  "ägg",
+  "socker",
+  "chips",
+  "godis",
+  "öl",
+  "vatten",
+  "schampo",
+  "tvål",
+  "tvätt",
+  "disk",
+  "toalettpapper",
+  "glass",
+  "sylt",
+  "müsli",
+  "yoghurt",
+  "soppa",
+  "sås",
+  "grädde",
+  "bacon",
+  "skinka",
+  "lax",
+  "räkor",
+  "potatis",
+  "lök",
+  "tomat",
+];
 
 // -------------------------------------------------------------------
-// Typer för ICA:s API-svar
+// Typer för ICA:s API-svar (v5)
 // -------------------------------------------------------------------
-
-interface IcaCategory {
-  name: string;
-  categoryId: string;
-  retailerCategoryId?: string;
-  productCount?: number;
-  childCategories?: IcaCategory[];
-}
 
 interface IcaProductPrice {
-  current?: { amount?: string; currency?: string };
+  current?: { amount?: number | string };
   unit?: {
     label?: string;
-    current?: { amount?: string; currency?: string };
+    current?: { amount?: number | string };
   };
-  savings?: { amount?: string };
-  ordinary?: { amount?: string };
+  ordinary?: { amount?: number | string };
+  savings?: { amount?: number | string };
 }
 
-interface IcaProductEntity {
-  productId: string;
+interface IcaProduct {
+  id?: string;
+  productId?: string;
   retailerProductId?: string;
-  name: string;
-  available?: boolean;
-  imagePaths?: string[];
-  price?: IcaProductPrice;
+  name?: string;
   brand?: string;
   ean?: string;
+  price?: IcaProductPrice;
+  /** Alternativt prisformat — direkt som nummer */
+  priceValue?: number;
+  ordinaryPrice?: number;
+  comparePrice?: string;
+  comparePriceUnit?: string;
+  image?: string;
+  imagePaths?: string[];
+  imageUrl?: string;
+  available?: boolean;
+  category?: string;
+  categoryName?: string;
+  displayVolume?: string;
+  description?: string;
 }
 
-interface IcaProductPageResponse {
-  pageToken?: string;
+interface IcaProductsResponse {
+  /** Produktlista — kan ligga direkt i roten eller under "products" */
+  products?: IcaProduct[];
   items?: Array<{
-    type: string;
-    product?: IcaProductEntity;
+    type?: string;
+    product?: IcaProduct;
   }>;
   entities?: {
-    product?: Record<string, IcaProductEntity>;
+    product?: Record<string, IcaProduct>;
   };
-}
-
-// -------------------------------------------------------------------
-// Session-hantering
-// -------------------------------------------------------------------
-
-interface IcaSession {
-  storeId: string;
-  cookies: Record<string, string>;
-  csrfToken: string;
-}
-
-async function initSession(storeId: string): Promise<IcaSession> {
-  const storeUrl = `${BASE_URL}/stores/${storeId}`;
-  const resp = await fetch(storeUrl, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html",
-    },
-    redirect: "manual",
-  });
-
-  // Samla cookies från set-cookie-headrar
-  const cookies: Record<string, string> = {};
-  const setCookieHeaders = resp.headers.getSetCookie?.() ?? [];
-  for (const header of setCookieHeaders) {
-    const match = header.match(/^([^=]+)=([^;]*)/);
-    if (match) {
-      cookies[match[1]] = match[2];
-    }
-  }
-
-  // Extrahera CSRF-token från __INITIAL_STATE__ i HTML
-  let csrfToken = "";
-  if (resp.ok) {
-    const html = await resp.text();
-    const stateMatch = html.match(
-      /window\.__INITIAL_STATE__\s*=\s*(\{.*?"csrf"\s*:\s*\{[^}]*\})/
-    );
-    if (stateMatch) {
-      const tokenMatch = stateMatch[1].match(
-        /"csrf"\s*:\s*\{\s*"token"\s*:\s*"([^"]+)"/
-      );
-      if (tokenMatch) {
-        csrfToken = tokenMatch[1];
-      }
-    }
-  }
-
-  return { storeId, cookies, csrfToken };
-}
-
-function buildCookieHeader(cookies: Record<string, string>): string {
-  return Object.entries(cookies)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("; ");
-}
-
-function buildHeaders(session: IcaSession): Record<string, string> {
-  return {
-    "User-Agent": USER_AGENT,
-    Accept: "application/json",
-    Cookie: buildCookieHeader(session.cookies),
-    ...(session.csrfToken ? { "x-csrf-token": session.csrfToken } : {}),
+  /** Offset-baserad paginering */
+  totalCount?: number;
+  pagination?: {
+    totalNumberOfResults?: number;
+    numberOfPages?: number;
+    currentPage?: number;
+    pageSize?: number;
   };
+  /** Token-baserad paginering */
+  pageToken?: string;
 }
 
 // -------------------------------------------------------------------
 // API-anrop
 // -------------------------------------------------------------------
 
-async function fetchCategories(
-  session: IcaSession
-): Promise<IcaCategory[]> {
-  const url = `${BASE_URL}/stores/${session.storeId}/api/webproductpagews/v1/categories?decoration=false&categoryDepth=10`;
-  const resp = await fetch(url, { headers: buildHeaders(session) });
-  if (!resp.ok) {
-    console.warn(`[ICA] Kunde inte hämta kategorier: ${resp.status}`);
-    return [];
+function buildBaseUrl(storeId: string): string {
+  return `https://handlaprivatkund.ica.se/stores/${storeId}`;
+}
+
+const HEADERS: Record<string, string> = {
+  "User-Agent": USER_AGENT,
+  Accept: "application/json",
+};
+
+/**
+ * Hämtar produkter via list-endpointen (offset-paginering).
+ */
+async function fetchProductList(
+  storeId: string,
+  limit: number,
+  offset: number,
+): Promise<IcaProductsResponse> {
+  const base = buildBaseUrl(storeId);
+  const url = `${base}/api/v5/products?limit=${limit}&offset=${offset}`;
+
+  const res = await fetch(url, { headers: HEADERS });
+  if (!res.ok) {
+    throw new Error(`ICA products ${res.status}: ${res.statusText}`);
   }
-  return (await resp.json()) as IcaCategory[];
+  return (await res.json()) as IcaProductsResponse;
 }
 
 /**
- * Hämtar produkter för en kategori. Returnerar produkter och eventuell pageToken
- * för nästa sida.
+ * Söker produkter via search-endpointen (offset-paginering).
  */
-async function fetchProductPage(
-  session: IcaSession,
+async function fetchProductSearch(
+  storeId: string,
+  term: string,
+  limit: number,
+  offset: number,
+): Promise<IcaProductsResponse> {
+  const base = buildBaseUrl(storeId);
+  const url = `${base}/api/v5/products/search?term=${encodeURIComponent(term)}&limit=${limit}&offset=${offset}`;
+
+  const res = await fetch(url, { headers: HEADERS });
+  if (!res.ok) {
+    throw new Error(
+      `ICA search "${term}" ${res.status}: ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as IcaProductsResponse;
+}
+
+// -------------------------------------------------------------------
+// Alternativa endpoints (äldre API som backup)
+// -------------------------------------------------------------------
+
+interface IcaCategory {
+  name: string;
+  categoryId: string;
+  childCategories?: IcaCategory[];
+}
+
+/**
+ * Hämtar kategorier via äldre webproductpagews-endpointen.
+ * Används som backup om v5-endpointen inte fungerar.
+ */
+async function fetchCategories(
+  storeId: string,
+): Promise<IcaCategory[]> {
+  const base = buildBaseUrl(storeId);
+  const url = `${base}/api/webproductpagews/v1/categories?decoration=false&categoryDepth=10`;
+  const res = await fetch(url, { headers: HEADERS });
+  if (!res.ok) return [];
+  return (await res.json()) as IcaCategory[];
+}
+
+/**
+ * Hämtar produkter via äldre webproductpagews-endpointen med kategori-ID.
+ */
+async function fetchProductsByCategory(
+  storeId: string,
   categoryId: string,
-  pageToken?: string
-): Promise<{ products: IcaProductEntity[]; nextPageToken?: string }> {
+  pageToken?: string,
+): Promise<IcaProductsResponse> {
+  const base = buildBaseUrl(storeId);
   const params = new URLSearchParams({
     categoryId,
     tag: "web",
     maxPageSize: String(PAGE_SIZE),
     includeAdditionalPageInfo: "true",
   });
-  if (pageToken) {
-    params.set("pageToken", pageToken);
-  }
+  if (pageToken) params.set("pageToken", pageToken);
 
-  const url = `${BASE_URL}/stores/${session.storeId}/api/webproductpagews/v6/product-pages?${params}`;
-  const resp = await fetch(url, { headers: buildHeaders(session) });
-
-  // WAF-utmaning returnerar 202 med x-amzn-waf-action: challenge
-  if (resp.status === 202) {
-    console.warn(
-      `[ICA] WAF-utmaning för kategori ${categoryId}. Produkter kan inte hämtas utan webbläsarsession.`
+  const url = `${base}/api/webproductpagews/v6/product-pages?${params}`;
+  const res = await fetch(url, { headers: HEADERS });
+  if (!res.ok) {
+    throw new Error(
+      `ICA category ${categoryId} ${res.status}: ${res.statusText}`,
     );
-    return { products: [] };
+  }
+  return (await res.json()) as IcaProductsResponse;
+}
+
+// -------------------------------------------------------------------
+// Hjälpfunktioner
+// -------------------------------------------------------------------
+
+/** Extrahera alla produkter från de olika svarsformat som ICA:s API kan returnera */
+function extractProducts(data: IcaProductsResponse): IcaProduct[] {
+  const products: IcaProduct[] = [];
+
+  // Format 1: produkter direkt i en lista
+  if (Array.isArray(data.products)) {
+    products.push(...data.products);
   }
 
-  if (!resp.ok) {
-    console.warn(
-      `[ICA] Misslyckades hämta produkter för ${categoryId}: ${resp.status}`
-    );
-    return { products: [] };
+  // Format 2: array i roten (svaret kan vara en ren lista)
+  if (Array.isArray(data)) {
+    products.push(...(data as unknown as IcaProduct[]));
   }
 
-  const data = (await resp.json()) as IcaProductPageResponse;
-  const products: IcaProductEntity[] = [];
-
-  // Svaret kan ha produkter i entities.product (äldre format) eller items (nyare)
+  // Format 3: entities.product (äldre API)
   if (data.entities?.product) {
     products.push(...Object.values(data.entities.product));
   }
+
+  // Format 4: items med inbäddade produkter
   if (data.items) {
     for (const item of data.items) {
       if (item.product) {
@@ -199,12 +260,121 @@ async function fetchProductPage(
     }
   }
 
-  return { products, nextPageToken: data.pageToken };
+  return products;
 }
 
-// -------------------------------------------------------------------
-// Hjälpfunktioner
-// -------------------------------------------------------------------
+/** Tolka pris från olika format som ICA returnerar */
+function parsePrice(val?: number | string): number | undefined {
+  if (val == null) return undefined;
+  if (typeof val === "number") return val;
+  const n = parseFloat(String(val).replace(",", "."));
+  return isNaN(n) ? undefined : n;
+}
+
+/** Tolka enhetsetikett från ICA:s format */
+function parseUnitLabel(label?: string): string {
+  if (!label) return "st";
+  const mapping: Record<string, string> = {
+    "fop.price.per.kg": "kr/kg",
+    "fop.price.per.l": "kr/l",
+    "fop.price.per.m": "kr/m",
+    "fop.price.per.st": "kr/st",
+    "fop.price.per.100g": "kr/100g",
+    "fop.price.per.100ml": "kr/100ml",
+    "fop.price.per.wash": "kr/tvätt",
+    "fop.price.per.portion": "kr/portion",
+  };
+  if (mapping[label]) return mapping[label];
+  // Om etiketten redan är läsbar (t.ex. "kr/kg"), returnera den
+  if (label.includes("/")) return label;
+  return "st";
+}
+
+/** Tolka kvantitet och enhet från produktnamn eller volymtext */
+function parseQuantity(text?: string): {
+  quantity?: number;
+  quantityString?: string;
+} {
+  if (!text) return {};
+  const match = text.match(
+    /(\d+[,.]?\d*)\s*(kg|g|mg|ml|cl|dl|l|st|pack|port|m)\b/i,
+  );
+  if (!match) return {};
+  return {
+    quantity: parseFloat(match[1].replace(",", ".")),
+    quantityString: `${match[1]}${match[2]}`,
+  };
+}
+
+/** Bygg bild-URL — ICA kan returnera relativa sökvägar */
+function resolveImageUrl(raw: IcaProduct): string | undefined {
+  const path =
+    raw.imageUrl ?? raw.image ?? raw.imagePaths?.[0] ?? undefined;
+  if (!path) return undefined;
+  if (path.startsWith("http")) return path;
+  // Relativ sökväg — ICA använder ofta assets.icanet.se
+  if (path.startsWith("/"))
+    return `https://assets.icanet.se${path}`;
+  return `https://assets.icanet.se/${path}`;
+}
+
+function mapProduct(
+  raw: IcaProduct,
+  storeId: string,
+): ScrapedProduct | null {
+  const id = raw.retailerProductId ?? raw.productId ?? raw.id;
+  if (!id || !raw.name) return null;
+
+  // Pris: försök hämta från price-objekt eller direkt fält
+  const price =
+    parsePrice(raw.price?.current?.amount) ??
+    parsePrice(raw.priceValue) ??
+    undefined;
+  if (price == null) return null;
+
+  // Ordinarie pris (före kampanj)
+  const ordinaryPrice = parsePrice(
+    raw.price?.ordinary?.amount ?? raw.ordinaryPrice,
+  );
+
+  // Enhet
+  const unit = parseUnitLabel(raw.price?.unit?.label);
+
+  // Kvantitet från displayVolume eller produktnamn
+  const volQty = parseQuantity(raw.displayVolume);
+  const { quantity, quantityString } =
+    volQty.quantity != null ? volQty : parseQuantity(raw.name);
+
+  // Bild-URL
+  const imageUrl = resolveImageUrl(raw);
+
+  // Produktsida-URL
+  const productUrl = `https://handlaprivatkund.ica.se/stores/${storeId}/products/${id}/details`;
+
+  // Kategori
+  const category =
+    raw.category ?? raw.categoryName ?? undefined;
+
+  const mapped = {
+    externalId: id,
+    name: raw.name,
+    brand: raw.brand || undefined,
+    ean: raw.ean || undefined,
+    price,
+    ordinaryPrice:
+      ordinaryPrice != null && ordinaryPrice > price
+        ? ordinaryPrice
+        : undefined,
+    unit,
+    quantity,
+    quantityString,
+    imageUrl,
+    url: productUrl,
+    category,
+  };
+
+  return ScrapedProductSchema.parse(mapped);
+}
 
 /** Extrahera bladkategorier (utan barn) rekursivt */
 function getLeafCategories(categories: IcaCategory[]): IcaCategory[] {
@@ -219,113 +389,6 @@ function getLeafCategories(categories: IcaCategory[]): IcaCategory[] {
   return leaves;
 }
 
-/** Hitta full kategoriväg (t.ex. "Mejeri/Ost/Hårdost") */
-function getCategoryPath(
-  categories: IcaCategory[],
-  targetId: string,
-  path: string[] = []
-): string | undefined {
-  for (const cat of categories) {
-    const current = [...path, cat.name];
-    if (cat.categoryId === targetId) {
-      return current.join("/");
-    }
-    if (cat.childCategories?.length) {
-      const found = getCategoryPath(
-        cat.childCategories,
-        targetId,
-        current
-      );
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
-/** Tolka enhetsetikett från ICA:s format (t.ex. "fop.price.per.kg" → "kr/kg") */
-function parseUnitLabel(label?: string): string {
-  if (!label) return "st";
-  const mapping: Record<string, string> = {
-    "fop.price.per.kg": "kr/kg",
-    "fop.price.per.l": "kr/l",
-    "fop.price.per.m": "kr/m",
-    "fop.price.per.st": "kr/st",
-    "fop.price.per.100g": "kr/100g",
-    "fop.price.per.100ml": "kr/100ml",
-    "fop.price.per.wash": "kr/tvätt",
-    "fop.price.per.portion": "kr/portion",
-  };
-  return mapping[label] ?? "st";
-}
-
-/** Tolka kvantitet och enhet från produktnamn (t.ex. "Mjölk 1,5l" → { quantity: 1.5, unit: "l" }) */
-function parseQuantityFromName(name: string): {
-  quantity?: number;
-  quantityString?: string;
-} {
-  const match = name.match(
-    /(\d+[,.]?\d*)\s*(kg|g|ml|cl|dl|l|st|pack|port)\b/i
-  );
-  if (!match) return {};
-  const numStr = match[1].replace(",", ".");
-  return {
-    quantity: parseFloat(numStr),
-    quantityString: `${match[1]}${match[2]}`,
-  };
-}
-
-function parseAmount(amount?: string): number | undefined {
-  if (!amount) return undefined;
-  const n = parseFloat(amount.replace(",", "."));
-  return isNaN(n) ? undefined : n;
-}
-
-function mapProduct(
-  raw: IcaProductEntity,
-  storeId: string,
-  categoryPath?: string
-): ScrapedProduct | null {
-  try {
-    const price = parseAmount(raw.price?.current?.amount);
-    if (price === undefined) return null;
-
-    const ordinaryPrice = parseAmount(raw.price?.ordinary?.amount);
-    const unit = parseUnitLabel(raw.price?.unit?.label);
-    const { quantity, quantityString } = parseQuantityFromName(raw.name);
-
-    const imageUrl = raw.imagePaths?.[0] || undefined;
-    const productUrl = raw.retailerProductId
-      ? `https://handlaprivatkund.ica.se/stores/${storeId}/products/${raw.retailerProductId}/details`
-      : undefined;
-
-    const mapped = {
-      externalId: raw.retailerProductId ?? raw.productId,
-      name: raw.name,
-      brand: raw.brand || undefined,
-      ean: raw.ean || undefined,
-      price,
-      ordinaryPrice: ordinaryPrice && ordinaryPrice > price ? ordinaryPrice : undefined,
-      unit,
-      quantity,
-      quantityString,
-      imageUrl,
-      url: productUrl,
-      category: categoryPath || undefined,
-    };
-
-    return ScrapedProductSchema.parse(mapped);
-  } catch (err) {
-    console.warn(
-      `[ICA] Kunde inte tolka produkt "${raw.name}": ${err instanceof Error ? err.message : err}`
-    );
-    return null;
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // -------------------------------------------------------------------
 // Huvudklass
 // -------------------------------------------------------------------
@@ -338,98 +401,131 @@ export class IcaScraper implements Scraper {
     this.storeId = storeId;
   }
 
-  /**
-   * Hämtar listan av ICA-butiker som erbjuder online-handel.
-   * Kan användas för att välja butik att skrapa.
-   */
-  static async fetchStores(): Promise<
-    Array<{ id: string; name: string; storeFormat: string; retailerSiteId: string }>
-  > {
-    const resp = await fetch(STORE_LIST_URL, {
-      headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-    });
-    if (!resp.ok) return [];
-    return resp.json();
-  }
-
   async scrape(): Promise<ScrapedProduct[]> {
-    console.log(`[ICA] Initierar session för butik ${this.storeId}...`);
-    const session = await initSession(this.storeId);
-
-    if (!Object.keys(session.cookies).length) {
-      console.error("[ICA] Kunde inte skapa session – inga cookies mottagna.");
-      return [];
-    }
-
-    console.log("[ICA] Hämtar kategorier...");
-    const allCategories = await fetchCategories(session);
-    if (!allCategories.length) {
-      console.error("[ICA] Inga kategorier hittades.");
-      return [];
-    }
-
-    const leafCategories = getLeafCategories(allCategories);
-    console.log(
-      `[ICA] Hittade ${leafCategories.length} bladkategorier. Hämtar produkter...`
-    );
-
+    const seen = new Set<string>();
     const products: ScrapedProduct[] = [];
-    const seenIds = new Set<string>();
-    let wafBlocked = false;
 
-    for (const cat of leafCategories) {
-      if (products.length >= MAX_PRODUCTS) break;
-      if (wafBlocked) break;
+    const addProduct = (raw: IcaProduct) => {
+      const id = raw.retailerProductId ?? raw.productId ?? raw.id;
+      if (!id || seen.has(id)) return;
+      seen.add(id);
 
-      const categoryPath = getCategoryPath(allCategories, cat.categoryId);
-      let pageToken: string | undefined;
-
-      do {
-        const result = await fetchProductPage(
-          session,
-          cat.categoryId,
-          pageToken
-        );
-
-        if (result.products.length === 0 && !pageToken) {
-          // Om första sidan returnerar 0 produkter kan det vara WAF
-          // Vi ger det fler försök med andra kategorier innan vi ger upp
-          break;
+      try {
+        const mapped = mapProduct(raw, this.storeId);
+        if (mapped) {
+          products.push(mapped);
         }
-
-        for (const raw of result.products) {
-          const id = raw.retailerProductId ?? raw.productId;
-          if (seenIds.has(id)) continue;
-          seenIds.add(id);
-
-          const mapped = mapProduct(raw, this.storeId, categoryPath);
-          if (mapped) {
-            products.push(mapped);
-          }
-
-          if (products.length >= MAX_PRODUCTS) break;
-        }
-
-        pageToken = result.nextPageToken;
-
-        if (pageToken) {
-          await delay(DELAY_MS);
-        }
-      } while (pageToken && products.length < MAX_PRODUCTS);
-
-      // Liten paus mellan kategorier
-      await delay(DELAY_MS);
-
-      // Om vi fått WAF-block på 3 kategorier i rad, ge upp
-      if (products.length === 0 && leafCategories.indexOf(cat) >= 2) {
-        wafBlocked = true;
+      } catch (err) {
         console.warn(
-          "[ICA] Verkar vara blockerad av WAF. Avbryter skrapning."
+          `[ICA] Ogiltig produkt ${id}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    };
+
+    // Steg 1: Försök hämta via v5 list-endpoint (hela sortimentet)
+    console.log("[ICA] Hämtar produkter via v5 list-endpoint...");
+    let v5Works = false;
+    try {
+      for (let offset = 0; offset < MAX_PRODUCTS; offset += PAGE_SIZE) {
+        const data = await fetchProductList(
+          this.storeId,
+          PAGE_SIZE,
+          offset,
+        );
+        const batch = extractProducts(data);
+        if (batch.length === 0) break;
+
+        v5Works = true;
+        for (const p of batch) addProduct(p);
+
+        // Om vi fått färre än page size finns det inte fler
+        if (batch.length < PAGE_SIZE) break;
+      }
+    } catch (err) {
+      console.warn(
+        `[ICA] v5 list-endpoint misslyckades: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
+    if (v5Works) {
+      console.log(
+        `[ICA] v5 list: ${products.length} produkter hittade`,
+      );
+    }
+
+    // Steg 2: Komplettera med sökningar om vi inte nått målet
+    if (products.length < MAX_PRODUCTS) {
+      console.log("[ICA] Kompletterar med sökningar...");
+      for (const term of SEARCH_TERMS) {
+        if (products.length >= MAX_PRODUCTS) break;
+
+        try {
+          for (let page = 0; page < MAX_PAGES_PER_QUERY; page++) {
+            const offset = page * PAGE_SIZE;
+            const data = await fetchProductSearch(
+              this.storeId,
+              term,
+              PAGE_SIZE,
+              offset,
+            );
+            const batch = extractProducts(data);
+            if (batch.length === 0) break;
+
+            for (const p of batch) addProduct(p);
+            if (batch.length < PAGE_SIZE) break;
+            if (products.length >= MAX_PRODUCTS) break;
+          }
+        } catch (err) {
+          console.warn(
+            `[ICA] Sökning "${term}" misslyckades: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
+    }
+
+    // Steg 3: Om varken v5 list eller search fungerade, prova äldre kategori-API
+    if (products.length === 0) {
+      console.log(
+        "[ICA] v5-API gav inga resultat, provar äldre kategori-API...",
+      );
+      try {
+        const categories = await fetchCategories(this.storeId);
+        const leaves = getLeafCategories(categories);
+
+        for (const cat of leaves) {
+          if (products.length >= MAX_PRODUCTS) break;
+
+          let pageToken: string | undefined;
+          do {
+            try {
+              const data = await fetchProductsByCategory(
+                this.storeId,
+                cat.categoryId,
+                pageToken,
+              );
+              const batch = extractProducts(data);
+              for (const p of batch) addProduct(p);
+
+              pageToken = data.pageToken;
+              if (batch.length === 0) break;
+            } catch (err) {
+              console.warn(
+                `[ICA] Kategori "${cat.name}" misslyckades: ${err instanceof Error ? err.message : err}`,
+              );
+              break;
+            }
+          } while (pageToken && products.length < MAX_PRODUCTS);
+        }
+      } catch (err) {
+        console.warn(
+          `[ICA] Kategori-API misslyckades: ${err instanceof Error ? err.message : err}`,
         );
       }
     }
 
-    console.log(`[ICA] Skrapning klar. ${products.length} produkter hämtade.`);
+    console.log(
+      `[ICA] Skrapning klar. ${products.length} unika produkter hämtade.`,
+    );
     return products;
   }
 }

@@ -4,20 +4,23 @@ import { ScrapedProduct, Scraper } from "./types.js";
  * Lidl-skrapare för lidl.se.
  *
  * STATUS: Lidl Sverige har INGEN e-handel för matvaror (2025/2026).
- * Lidl driver enbart fysiska butiker i Sverige och har valt att inte
- * satsa på online-mathandel. Deras webbplats (lidl.se) visar sortiment
- * och erbjudanden men saknar ett API för produktkatalog med priser.
+ * Lidl driver enbart fysiska butiker i Sverige och har aktivt valt att
+ * inte satsa på online-mathandel (källa: ehandel.se, fri-kopenskap.se).
  *
- * Möjliga framtida strategier:
- *   1. Bevaka om Lidl lanserar e-handel i Sverige
- *   2. Lidl Plus-appen har ett API men det kräver autentisering via
- *      mobilapp och ger främst kvitton/kuponger, inte sortiment
- *   3. Veckoerbjudanden ("Veckans klipp") kan eventuellt skrapas
- *      via HTML-parsing av lidl.se/erbjudanden
+ * Undersökta alternativ:
+ *   - lidl.se renderar allt via klient-JS (SPA), ingen produktdata i HTML
+ *   - Inget publikt API hittades (vare sig REST eller GraphQL)
+ *   - RapidAPI:s Lidl-API stödjer DE/BE/CZ/FR/NL/PL/SK — INTE SE
+ *   - Lidl Plus-appen har ett API (kvitton/kuponger) men kräver
+ *     mobilautentisering och innehåller inte sortiment/priser
+ *   - Reklambladssidan (lidl.se/c/reklamblad/s10018018) laddar data
+ *     dynamiskt via leaflets.schwarz-infrastruktur, ej tillgängligt utan
+ *     full webbläsarrendering
  *
- * TODO: Implementera skrapning av erbjudanden via Playwright eller
- * HTML-parsing om det bedöms värdefullt. Kräver dock att sidans
- * JavaScript renderas (SSR/SPA).
+ * TODO: Om Lidl-data bedöms värdefullt, krävs Playwright för att:
+ *   1. Rendera lidl.se/c/vara-varor/s10017042 (sortimentssida)
+ *   2. Intercepta nätverksanrop för att hitta den faktiska API-URL:en
+ *   3. Alternativt skrapa veckoerbjudanden via reklamblad
  */
 export class LidlScraper implements Scraper {
   readonly chainId = "lidl";
@@ -26,6 +29,7 @@ export class LidlScraper implements Scraper {
     console.warn(
       "[lidl] Lidl Sverige saknar e-handel för matvaror. " +
         "Ingen produktdata kan hämtas via API. " +
+        "Kräver Playwright för att intercepta klient-sidans API-anrop. " +
         "Se kommentar i lidl.ts för detaljer."
     );
     return [];
